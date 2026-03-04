@@ -162,7 +162,14 @@ async function launchElectronApp(
       // Keep temp dir for debugging — print its path
       console.log(`[e2e] Test FAILED — temp dir preserved: ${tempDir}`);
     } else {
-      rmSync(tempDir, { recursive: true, force: true });
+      // Retry once: detached gateway processes may still hold file handles
+      // briefly after ensurePortFree, causing ENOTEMPTY on first attempt.
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        await new Promise((r) => setTimeout(r, 500));
+        rmSync(tempDir, { recursive: true, force: true });
+      }
     }
   }
 }

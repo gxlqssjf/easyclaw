@@ -897,6 +897,15 @@ app.whenReady().then(async () => {
     });
   });
 
+  // Diagnostic: log process exit to catch silent crashes (e.g. antivirus
+  // killing the process, native segfaults). The 'exit' event fires
+  // synchronously even when the process is terminated externally.
+  process.on("exit", (code) => {
+    if (!isQuitting) {
+      log.error(`Process exiting unexpectedly (code=${code}, isQuitting=false)`);
+    }
+  });
+
   // Initialize STT manager
   const sttManager = new SttManager(storage, secretStore);
   await sttManager.initialize();

@@ -207,6 +207,8 @@ export class GatewayLauncher extends EventEmitter<GatewayEvents> {
     // gateway process that blocks all future startups.
     env["OPENCLAW_NO_RESPAWN"] = "1";
 
+    log.debug("[spawn:1] env built, seeding compile cache...");
+
     // Sanitize env vars inherited from the parent (Electron main process) or
     // CI environment that can cause the ELECTRON_RUN_AS_NODE child to hang.
     //
@@ -247,13 +249,15 @@ export class GatewayLauncher extends EventEmitter<GatewayEvents> {
               `Seeded compile cache from shipped cache (version: ${shippedVer})`,
             );
           }
-        } catch {
-          // Copy failed — runtime will compile from scratch (graceful degradation)
+        } catch (err) {
+          log.warn("Compile cache seeding failed:", err);
         }
       }
 
       env.NODE_COMPILE_CACHE = userCacheDir;
     }
+
+    log.debug("[spawn:2] compile cache done, writing preload...");
 
     // ── Startup profiler preload ──
     // Inject a CJS preload script that logs timing milestones to stderr.
@@ -290,18 +294,34 @@ const ow=process.stdout.write;process.stdout.write=function(c,...a){if(String(c)
         }
         const existingNodeOpts = env.NODE_OPTIONS || "";
         env.NODE_OPTIONS = `--require ${JSON.stringify(preloadPath)} ${existingNodeOpts}`.trim();
-      } catch {
-        // Non-critical — skip profiling if we can't write the preload
+      } catch (err) {
+        log.warn("Preload script writing failed:", err);
       }
     }
 
+    log.debug(
+      `[spawn:3] preload done, spawning: bin=${this.options.nodeBin}, ` +
+      `entry=${this.options.entryPath}, cwd=${this.options.stateDir ?? "(none)"}`,
+    );
+
     const spawnTs = performance.now();
-    const child = spawn(this.options.nodeBin, [this.options.entryPath, "gateway"], {
-      env,
-      cwd: this.options.stateDir || undefined,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true, // New process group so we can kill the entire tree on stop
-    });
+    let child: ChildProcess;
+    try {
+      child = spawn(this.options.nodeBin, [this.options.entryPath, "gateway"], {
+        env,
+        cwd: this.options.stateDir || undefined,
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: true, // New process group so we can kill the entire tree on stop
+      });
+    } catch (err) {
+      log.error("spawn() threw synchronously:", err);
+      this.lastError = String(err);
+      this.setState("stopped");
+      this.emit("error", err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+
+    log.debug(`[spawn:4] spawn returned, pid=${child.pid ?? "(null)"}`);
 
     this.process = child;
     this.lastStartedAt = new Date();

@@ -4,7 +4,6 @@ import QRCode from "qrcode";
 import {
     generateMobilePairingCode,
     getMobilePairingStatus,
-    disconnectMobilePairing
 } from "../api/mobile-chat.js";
 import { Modal } from "./Modal.js";
 
@@ -21,29 +20,10 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
     const [error, setError] = useState<string | null>(null);
     const [pairingCode, setPairingCode] = useState<string | null>(null);
     const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
-    const [isConnected, setIsConnected] = useState(false);
-    const [connectedDeviceId, setConnectedDeviceId] = useState<string | null>(null);
+    const [existingCount, setExistingCount] = useState(0);
 
     const pollIntervalRef = useRef<number | null>(null);
-
-    const fetchStatus = useCallback(async () => {
-        try {
-            const res = await getMobilePairingStatus();
-            if (res.pairing) {
-                setIsConnected(true);
-                setConnectedDeviceId(res.pairing.mobileDeviceId || "Unknown Device");
-                setPairingCode(null);
-                setQrDataUrl(null);
-                return true; // is connected
-            }
-            setIsConnected(false);
-            setConnectedDeviceId(null);
-            return false; // not connected
-        } catch (err: any) {
-            console.warn("Failed to fetch mobile status:", err);
-            return false;
-        }
-    }, []);
+    const baseCountRef = useRef(0);
 
     const generateCode = useCallback(async () => {
         try {
@@ -53,14 +33,11 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
             setPairingCode(res.code || null);
 
             if (res.code) {
-                // Generate QR Code data URL
-                const qrData = await QRCode.toDataURL(res.code, {
+                const qrContent = res.qrUrl || res.code;
+                const qrData = await QRCode.toDataURL(qrContent, {
                     margin: 2,
                     width: 250,
-                    color: {
-                        dark: "#000000FF",
-                        light: "#FFFFFFFF",
-                    }
+                    color: { dark: "#000000FF", light: "#FFFFFFFF" }
                 });
                 setQrDataUrl(qrData);
             } else {
@@ -76,12 +53,15 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
     const loadInitialData = useCallback(async () => {
         if (!isOpen) return;
         setLoading(true);
-        const currentlyConnected = await fetchStatus();
-        if (!currentlyConnected) {
-            await generateCode();
-        }
+        try {
+            const res = await getMobilePairingStatus();
+            const count = res.pairings?.length ?? 0;
+            setExistingCount(count);
+            baseCountRef.current = count;
+        } catch { /* ignore */ }
+        await generateCode();
         setLoading(false);
-    }, [isOpen, fetchStatus, generateCode]);
+    }, [isOpen, generateCode]);
 
     useEffect(() => {
         if (!isOpen) {
@@ -94,14 +74,18 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
 
         loadInitialData();
 
-        // Poll status every 3 seconds to catch when a mobile device connects
+        // Poll: detect when a NEW pairing appears (count increases)
         pollIntervalRef.current = window.setInterval(async () => {
-            const currentlyConnected = await fetchStatus();
-            if (currentlyConnected && pollIntervalRef.current) {
-                clearInterval(pollIntervalRef.current);
-                pollIntervalRef.current = null;
-                onBindingSuccess();
-            }
+            try {
+                const res = await getMobilePairingStatus();
+                const count = res.pairings?.length ?? 0;
+                setExistingCount(count);
+                if (count > baseCountRef.current && pollIntervalRef.current) {
+                    clearInterval(pollIntervalRef.current);
+                    pollIntervalRef.current = null;
+                    onBindingSuccess();
+                }
+            } catch { /* ignore */ }
         }, 3000);
 
         return () => {
@@ -109,30 +93,7 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
                 clearInterval(pollIntervalRef.current);
             }
         };
-    }, [isOpen, loadInitialData, fetchStatus, onBindingSuccess]);
-
-    const handleDisconnect = async () => {
-        if (!confirm(t("mobile.disconnectConfirm") as string)) return;
-        try {
-            setLoading(true);
-            await disconnectMobilePairing();
-            await loadInitialData(); // Will regenerate a new code
-
-            // Restart polling
-            pollIntervalRef.current = window.setInterval(async () => {
-                const currentlyConnected = await fetchStatus();
-                if (currentlyConnected && pollIntervalRef.current) {
-                    clearInterval(pollIntervalRef.current);
-                    pollIntervalRef.current = null;
-                    onBindingSuccess();
-                }
-            }, 3000);
-
-        } catch (err: any) {
-            setError(t("mobile.disconnectFailed", { error: err.message || "Unknown error" }));
-            setLoading(false);
-        }
-    };
+    }, [isOpen, loadInitialData, onBindingSuccess]);
 
     return (
         <Modal
@@ -144,48 +105,30 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
             <div className="modal-form-col">
                 {error && <div className="modal-error-box">{error}</div>}
 
-                <div style={{ padding: "1rem 0" }}>
-                    {loading && !pairingCode && !isConnected ? (
+                <div className="mobile-pairing-modal-body">
+                    {loading && !pairingCode ? (
                         <p>{t("common.loading")}</p>
-                    ) : isConnected ? (
-                        <div className="mobile-connected-view" style={{ textAlign: "center" }}>
-                            <div className="status-badge badge-success" style={{ display: "inline-block", marginBottom: "1rem" }}>{t("common.connected")}</div>
-                            <p>{t("mobile.connectedDesc", { device: connectedDeviceId })}</p>
-                            <div style={{ marginTop: "1rem" }}>
-                                <button className="btn btn-danger" onClick={handleDisconnect} disabled={loading}>
-                                    {t("mobile.disconnect")}
-                                </button>
-                            </div>
-                        </div>
                     ) : (
-                        <div className="mobile-pairing-view" style={{ textAlign: "center" }}>
-                            <div className="status-badge badge-warning" style={{ display: "inline-block" }}>{t("mobile.waitingForConnection")}</div>
-                            <p style={{ marginTop: "1rem", marginBottom: "2rem" }}>
-                                {t("mobile.scanHint")}
-                            </p>
+                        <div className="mobile-pairing-view">
+                            {existingCount > 0 && (
+                                <p className="mobile-existing-hint">
+                                    {t("mobile.existingPairings", { count: existingCount })}
+                                </p>
+                            )}
+
+                            <div className="status-badge badge-warning">{t("mobile.waitingForConnection")}</div>
+                            <p className="mobile-scan-hint">{t("mobile.scanHint")}</p>
 
                             {qrDataUrl && (
-                                <div className="qr-container" style={{ margin: "0 auto", padding: "16px", background: "white", display: "inline-block", borderRadius: "12px", boxShadow: "0 4px 6px rgba(0,0,0,0.1)" }}>
-                                    <img src={qrDataUrl} alt="Pairing QR Code" width={250} height={250} style={{ display: "block" }} />
+                                <div className="mobile-qr-container">
+                                    <img src={qrDataUrl} alt="Pairing QR Code" width={250} height={250} />
                                 </div>
                             )}
 
                             {pairingCode && (
-                                <div className="code-container" style={{ marginTop: "2rem" }}>
+                                <div className="mobile-code-section">
                                     <p>{t("mobile.manualCodeHint")}</p>
-                                    <div className="pairing-code" style={{
-                                        fontSize: "2rem",
-                                        letterSpacing: "4px",
-                                        fontWeight: "bold",
-                                        fontFamily: "monospace",
-                                        background: "var(--bg-secondary)",
-                                        padding: "1rem 2rem",
-                                        borderRadius: "8px",
-                                        display: "inline-block",
-                                        marginTop: "0.5rem"
-                                    }}>
-                                        {pairingCode}
-                                    </div>
+                                    <div className="mobile-pairing-code">{pairingCode}</div>
                                 </div>
                             )}
                         </div>

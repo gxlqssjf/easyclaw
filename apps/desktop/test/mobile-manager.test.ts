@@ -36,19 +36,29 @@ describe("MobileManager", () => {
     });
 
     it("should successfully request a pairing code", async () => {
-        // Setup fetch mock to return a code
+        // Setup fetch mock to return a GraphQL response
         const mockResponse = {
             ok: true,
-            json: vi.fn().mockResolvedValue({ code: "ABCDEF" }),
+            json: vi.fn().mockResolvedValue({
+                data: {
+                    generatePairingCode: { code: "ABCDEF", qrUrl: null },
+                },
+            }),
         };
         (global.fetch as any).mockResolvedValue(mockResponse);
 
         const result = await manager.requestPairingCode();
 
-        expect(global.fetch).toHaveBeenCalledWith("http://mock-cp/api/v1/pair/generate", expect.objectContaining({
+        expect(global.fetch).toHaveBeenCalledWith("http://mock-cp/graphql", expect.objectContaining({
             method: "POST",
-            body: JSON.stringify({ desktopDeviceId: manager.getDesktopDeviceId() })
+            headers: { "Content-Type": "application/json" },
         }));
+
+        // Verify the GraphQL body contains the mutation
+        const callArgs = (global.fetch as any).mock.calls[0];
+        const body = JSON.parse(callArgs[1].body);
+        expect(body.query).toContain("generatePairingCode");
+        expect(body.variables.desktopDeviceId).toBe(manager.getDesktopDeviceId());
 
         expect(result.code).toBe("ABCDEF");
 
@@ -66,10 +76,14 @@ describe("MobileManager", () => {
     });
 
     it("should clear pairing and cached code on disconnect", async () => {
-        // First cache a code
+        // First cache a code via GraphQL mock
         const mockResponse = {
             ok: true,
-            json: vi.fn().mockResolvedValue({ code: "123456" }),
+            json: vi.fn().mockResolvedValue({
+                data: {
+                    generatePairingCode: { code: "123456", qrUrl: null },
+                },
+            }),
         };
         (global.fetch as any).mockResolvedValue(mockResponse);
         await manager.requestPairingCode();

@@ -429,14 +429,30 @@ app.whenReady().then(async () => {
       onConnect: () => {
         log.info("Gateway RPC client connected");
 
-        // Start Mobile Sync engine if a pairing exists
-        const pairing = storage.mobilePairings.getActivePairing();
-        if (pairing) {
+        // Start Mobile Sync engines for all active pairings (skip stale)
+        const allPairings = storage.mobilePairings.getAllPairings();
+        const stalePairings = [];
+        for (const pairing of allPairings) {
+          if (pairing.status === 'stale') {
+            stalePairings.push({
+              pairingId: pairing.pairingId || pairing.id,
+              mobileDeviceId: pairing.mobileDeviceId,
+            });
+            continue;
+          }
           rpcClient?.request("mobile_chat_start_sync", {
+            pairingId: pairing.pairingId,
             accessToken: pairing.accessToken,
             relayUrl: pairing.relayUrl,
-            desktopDeviceId: pairing.deviceId
-          }).catch((e: unknown) => log.error("Failed to start Mobile Sync on connect:", e));
+            desktopDeviceId: pairing.deviceId,
+            mobileDeviceId: pairing.mobileDeviceId || pairing.id,
+          }).catch((e: unknown) => log.error(`Failed to start Mobile Sync for ${pairing.pairingId || pairing.mobileDeviceId || pairing.id}:`, e));
+        }
+
+        // Register stale pairings so the mobile channel stays visible in Panel
+        if (stalePairings.length > 0) {
+          rpcClient?.request("mobile_chat_register_stale", { pairings: stalePairings })
+            .catch((e: unknown) => log.error("Failed to register stale mobile pairings:", e));
         }
       },
       onClose: () => {

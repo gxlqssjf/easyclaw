@@ -35,7 +35,7 @@ The temp directory is deleted after each test via `rmSync`, ensuring tests are *
 | `test` | `import { test } from "./electron-fixture.js"` | Returning user (has a provider key) | Main page with sidebar |
 | `freshTest` | `import { freshTest as test } from "./electron-fixture.js"` | Brand-new user (empty database) | Onboarding page |
 
-**Returning user (`test`)**: Seeds a Volcengine provider key via the gateway REST API (`POST /api/provider-keys` + `PUT /api/settings`), then reloads. If `E2E_VOLCENGINE_API_KEY` is not set, falls back to clicking "Skip setup" so basic smoke tests still work without real API keys.
+**Returning user (`test`)**: Skips onboarding by clicking "Skip setup" to reach the main page. No API keys required.
 
 **Fresh user (`freshTest`)**: Launches with an empty database so the app shows the onboarding page. Requires `E2E_ZHIPU_API_KEY` for the full onboarding test (otherwise that test is skipped).
 
@@ -50,9 +50,9 @@ Uses the `freshTest` fixture (empty database, lands on onboarding page).
 | 1 | Fresh user completes onboarding with GLM API key | Switch to API tab -> Select "Zhipu (GLM) - China" -> Select "GLM-4.7-Flash" -> Fill API key -> Click "Save & Continue" -> Wait for "All Set" page -> Click "Go to Dashboard" -> Verify sidebar loads | `E2E_ZHIPU_API_KEY` |
 | 2 | Fresh user can skip onboarding | Click "Skip setup" -> Verify sidebar loads | No |
 
-### `smoke.spec.ts` — Returning User Smoke Tests (6 tests)
+### `smoke.spec.ts` — Returning User Smoke Tests (5 tests)
 
-Uses the `test` fixture (pre-seeded Volcengine key, lands on main page).
+Uses the `test` fixture (skips onboarding, lands on main page).
 
 | # | Test | Steps | Requires API Key |
 |---|------|-------|-----------------|
@@ -60,8 +60,7 @@ Uses the `test` fixture (pre-seeded Volcengine key, lands on main page).
 | 2 | Panel renders with sidebar navigation | Verify `.sidebar-brand-text` visible -> Verify >= 5 nav buttons | No |
 | 3 | Chat page is default and gateway connects | Verify first nav has `nav-active` -> Wait for `.chat-status-dot-connected` -> Verify stable for 3s | No |
 | 4 | LLM Providers page: dropdowns and pricing | Dismiss modals -> Navigate to LLM Providers -> Verify Subscription tab active -> Open provider dropdown (2-3 options) -> Verify pricing card -> Switch to API tab -> Open provider dropdown (10-18 options) -> Verify pricing table | No |
-| 5 | Add second key and switch active provider | Dismiss modals -> Navigate to LLM Providers -> Verify 1 active volcengine key -> Add GLM key via form (API tab, Zhipu, GLM-4.7-Flash) -> Verify 2 keys (volcengine active, zhipu inactive) -> Click "Activate" on zhipu -> Verify zhipu active, volcengine inactive | `E2E_ZHIPU_API_KEY` + `E2E_VOLCENGINE_API_KEY` |
-| 6 | Window has correct web preferences | Verify `nodeIntegration: false` and `contextIsolation: true` | No |
+| 5 | Window has correct web preferences | Verify `nodeIntegration: false` and `contextIsolation: true` | No |
 
 ## API Keys
 
@@ -69,12 +68,11 @@ Tests that interact with real LLM providers require API keys. Place them in `e2e
 
 ```
 E2E_ZHIPU_API_KEY=your-zhipu-key-here
-E2E_VOLCENGINE_API_KEY=your-volcengine-key-here
 ```
 
 `global-setup.ts` auto-loads this file before tests. CLI env vars take priority over `.env` values.
 
-**Without API keys**: 6 tests pass, 2 are skipped (onboarding completion + key management).
+**Without API keys**: All tests pass except the onboarding completion test (which is skipped).
 
 ## Dev vs Prod Modes
 

@@ -2,6 +2,7 @@ import type { ChannelsStatusSnapshot, ChannelAccountSnapshot, WeComBindingStatus
 
 // OpenClaw built-in channels
 export const KNOWN_CHANNELS = [
+  { id: "mobile", labelKey: "nav.mobile", tutorialUrl: "", tooltip: "mobile.description" },
   { id: "telegram", labelKey: "channels.channelTelegram", tutorialUrl: "https://docs.openclaw.ai/channels/telegram", tooltip: "channels.tooltipTelegram" },
   { id: "whatsapp", labelKey: "channels.channelWhatsApp", tutorialUrl: "https://docs.openclaw.ai/channels/whatsapp", tooltip: "channels.tooltipWhatsApp" },
   { id: "discord", labelKey: "channels.channelDiscord", tutorialUrl: "https://docs.openclaw.ai/channels/discord", tooltip: "channels.tooltipDiscord" },
@@ -14,7 +15,6 @@ export const KNOWN_CHANNELS = [
   { id: "matrix", labelKey: "channels.channelMatrix", tutorialUrl: "https://docs.openclaw.ai/channels/matrix", tooltip: "channels.tooltipMatrix" },
   { id: "mattermost", labelKey: "channels.channelMattermost", tutorialUrl: "https://docs.openclaw.ai/channels/mattermost", tooltip: "channels.tooltipMattermost" },
   { id: "msteams", labelKey: "channels.channelMsteams", tutorialUrl: "https://docs.openclaw.ai/channels/msteams", tooltip: "channels.tooltipMsteams" },
-  { id: "mobile", labelKey: "nav.mobile", tutorialUrl: "", tooltip: "mobile.description" },
 ] as const;
 
 // Channels that require services blocked in mainland China (GFW)
@@ -45,14 +45,12 @@ export interface AccountEntry {
   channelLabel: string;
   account: ChannelAccountSnapshot;
   isWecom?: boolean;
-  isMobile?: boolean;
 }
 
 /** Build the unified accounts list from snapshot + WeCom status, filtering synthetic defaults. */
 export function buildAccountsList(
   snapshot: ChannelsStatusSnapshot,
   wecomStatus: WeComBindingStatusResponse | null,
-  mobileStatus: { pairing?: { mobileDeviceId: string } } | null,
   t: (key: string) => string,
 ): AccountEntry[] {
   const allAccounts: AccountEntry[] = [];
@@ -74,24 +72,10 @@ export function buildAccountsList(
     });
   }
 
-  // Add Mobile virtual account if relay connection exists
-  if (mobileStatus && mobileStatus.pairing) {
-    allAccounts.push({
-      channelId: "mobile",
-      channelLabel: t("nav.mobile"),
-      isMobile: true,
-      account: {
-        accountId: "default",
-        name: t("nav.mobile"),
-        configured: true,
-        running: true,
-        enabled: true,
-        dmPolicy: "pairing",
-      } as ChannelAccountSnapshot,
-    });
-  }
-
   for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
+    // WeCom is handled as a virtual account above. Skip its raw gateway entries.
+    if (channelId === "wechat") continue;
+
     const knownChannel = KNOWN_CHANNELS.find(c => c.id === channelId);
     const channelLabel = knownChannel ? t(knownChannel.labelKey) : snapshot.channelLabels[channelId] || channelId;
 

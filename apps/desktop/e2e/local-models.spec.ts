@@ -107,7 +107,7 @@ test.describe("Local Models E2E", () => {
   test("full local key lifecycle: add, verify card, update URL, remove", async ({ window }) => {
     await navigateToModels(window);
 
-    // Count pre-existing keys (the fixture may seed one when E2E_VOLCENGINE_API_KEY is set)
+    // Count pre-existing keys (other tests or fixtures may have added some)
     const keyCards = window.locator(".key-card");
     const initialCount = await keyCards.count();
 

@@ -1,4 +1,4 @@
-import { useState, useRef, Fragment } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import type { ChannelAccountSnapshot } from "../../api/index.js";
 import {
   fetchAllowlist,
@@ -9,6 +9,7 @@ import {
   setRecipientOwner,
   type PairingRequest,
 } from "../../api/channels.js";
+import { fetchMobileDeviceStatus, disconnectMobilePairing, getMobilePairingStatus, type MobileDeviceStatusResponse } from "../../api/mobile-chat.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
 import { StatusBadge, type AccountEntry } from "./channel-defs.jsx";
 
@@ -40,9 +41,26 @@ export function ChannelAccountsTable({
   const [recipientData, setRecipientData] = useState<Record<string, RecipientData>>({});
   const [processing, setProcessing] = useState<string | null>(null);
   const [removeConfirm, setRemoveConfirm] = useState<{ channelId: string; entry: string } | null>(null);
+  const [mobileDeviceStatus, setMobileDeviceStatus] = useState<MobileDeviceStatusResponse["devices"]>({});
 
   // Track in-flight label saves to show subtle feedback
   const savingLabelsRef = useRef<Set<string>>(new Set());
+
+  // Poll mobile device status while the mobile channel is expanded
+  useEffect(() => {
+    if (!expandedChannels.has("mobile")) return;
+
+    let cancelled = false;
+    async function poll() {
+      try {
+        const result = await fetchMobileDeviceStatus();
+        if (!cancelled) setMobileDeviceStatus(result.devices);
+      } catch { /* ignore */ }
+    }
+    poll();
+    const timer = setInterval(poll, 10_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [expandedChannels.has("mobile")]);
 
   async function loadRecipientData(channelId: string) {
     setRecipientData(prev => ({
@@ -132,7 +150,15 @@ export function ChannelAccountsTable({
     setProcessing(entry);
 
     try {
-      await removeFromAllowlist(channelId, entry);
+      if (channelId === "mobile") {
+        // Mobile channel: use full disconnect (DB + allowlist + engine cleanup)
+        // Find the pairing DB id by mobileDeviceId
+        const statusResp = await getMobilePairingStatus();
+        const pairing = statusResp.pairings?.find(p => p.pairingId === entry || p.id === entry);
+        await disconnectMobilePairing(pairing?.id);
+      } else {
+        await removeFromAllowlist(channelId, entry);
+      }
       setRecipientData(prev => {
         const data = prev[channelId];
         if (!data) return prev;
@@ -144,6 +170,14 @@ export function ChannelAccountsTable({
           },
         };
       });
+      // Clear stale status from local state
+      if (channelId === "mobile") {
+        setMobileDeviceStatus(prev => {
+          const next = { ...prev };
+          delete next[entry];
+          return next;
+        });
+      }
     } catch (err) {
       setRecipientData(prev => {
         const data = prev[channelId];
@@ -312,6 +346,7 @@ export function ChannelAccountsTable({
                 <table className="recipients-table">
                   <thead>
                     <tr>
+                      {channelId === "mobile" && <th className="presence-col"></th>}
                       <th>{t("pairing.userId")}</th>
                       <th>{t("pairing.aliasColumn")}</th>
                       <th>{t("pairing.roleColumn")}</th>
@@ -321,9 +356,23 @@ export function ChannelAccountsTable({
                   <tbody>
                     {data.allowlist.map(entry => {
                       const isOwner = data.owners[entry] ?? false;
+                      const deviceStatus = channelId === "mobile" ? mobileDeviceStatus[entry] : undefined;
                       return (
                         <tr key={entry}>
-                          <td>{entry}</td>
+                          {channelId === "mobile" && (
+                            <td className="presence-col">
+                              <span
+                                className={`presence-dot ${deviceStatus?.stale ? "presence-stale" : deviceStatus?.mobileOnline ? "presence-online" : "presence-offline"}`}
+                                title={deviceStatus?.stale ? t("pairing.staleTooltip") : deviceStatus?.mobileOnline ? "Online" : "Offline"}
+                              />
+                            </td>
+                          )}
+                          <td>
+                            {entry}
+                            {deviceStatus?.stale && (
+                              <span className="stale-hint">{t("pairing.staleHint")}</span>
+                            )}
+                          </td>
                           <td>
                             <input
                               className="recipient-label-input"
@@ -422,7 +471,7 @@ export function ChannelAccountsTable({
                       <td>{account.dmPolicy ? t(`channels.dmPolicyLabel_${account.dmPolicy}`, { defaultValue: account.dmPolicy }) : "\u2014"}</td>
                       <td>
                         <div className="td-actions">
-                          {isWecom ? (
+                          {isWecom || channelId === "mobile" ? (
                             <button className="btn btn-secondary btn-invisible" disabled aria-hidden="true">{t("common.edit")}</button>
                           ) : (
                             <button

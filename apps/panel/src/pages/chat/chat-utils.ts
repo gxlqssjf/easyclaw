@@ -102,8 +102,16 @@ export function cleanMessageText(text: string): string {
   // These are injected by plugins for the agent but not meant for the user.
   cleaned = cleaned.replace(/---\s+EasyClaw[\s\S]*?---\s+End\s+\w[\w\s]*---/g, "").trim();
 
-  // Strip inline timestamp — rendered separately above the bubble
-  cleaned = cleaned.replace(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})? [A-Z]{2,5}\]\s*/, "");
+  // Strip queue-collected message wrapper produced by OpenClaw's drain.ts
+  // when messages arrive while the agent is busy processing another run.
+  // Format: "[Queued messages while agent was busy]\n\n---\nQueued #1\n\n<actual message>"
+  cleaned = cleaned.replace(/^\[Queued messages while agent was busy\]\s*/, "");
+  cleaned = cleaned.replace(/---\s*Queued #\d+\s*/g, "").trim();
+
+  // Strip channel envelope prefix — rendered separately above the bubble.
+  // Matches both bare timestamps like [Thu 2026-03-05 23:26 PST]
+  // and full envelopes like [Mobile UUID +1s Thu 2026-03-05 23:26 PST].
+  cleaned = cleaned.replace(/^\[[^\]]*\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? [A-Z]{2,5}\]\s*/, "");
 
   // Strip gateway [System Message] blocks (cron delivery, system events).
   // The entire message is internal scaffolding — the agent's response follows separately.
@@ -115,9 +123,12 @@ export function cleanMessageText(text: string): string {
   // display name isn't resolved, the raw ou_xxx id leaks into the chat bubble.
   cleaned = cleaned.replace(/^ou_[a-f0-9]+:\s*/, "");
 
-  // Replace [media attached: <path> (<mime>) | <path>] blocks with a placeholder.
-  // The gateway stores inbound images as file paths; the panel cannot display them.
-  cleaned = cleaned.replace(/\[media attached:\s*[^\]]+\]/g, IMAGE_PLACEHOLDER);
+  // Replace [media attached: <path> (<mime>) | <path>] blocks.
+  // Audio attachments are stripped silently (the transcript or [Voice Ns] label is enough).
+  // Non-audio attachments get an image placeholder since the panel can't display file paths.
+  cleaned = cleaned.replace(/\[media attached:\s*[^\]]+\]/g, (match) =>
+    /\(audio\//.test(match) ? "" : IMAGE_PLACEHOLDER,
+  ).trim();
 
   // Strip agent instruction about sending images back (injected by gateway for media messages)
   cleaned = cleaned.replace(/To send an image back,[\s\S]*?Keep caption in the text body\.\s*/g, "").trim();
@@ -137,9 +148,12 @@ export function cleanMessageText(text: string): string {
   // Strip trailing "Current time: ..." line appended by heartbeat runner
   cleaned = cleaned.replace(/\nCurrent time: .+$/, "").trim();
 
-  // Detect audio transcript pattern:
-  //   [Audio] User text: [Telegram ... ] <media:audio>\nTranscript: 实际文本
-  const audioMatch = cleaned.match(/\[Audio\]\s*User text:\s*\[.*?\]\s*<media:audio>\s*Transcript:\s*([\s\S]*)/);
+  // Detect audio transcript pattern from media-understanding module.
+  // Formats vary by channel:
+  //   Telegram: [Audio] User text: [Telegram ...] <media:audio>\nTranscript: text
+  //   Mobile:   [Audio]\nUser text:\n[Mobile ...] [Voice 3s]\nTranscript:\ntext
+  // Generalized: [Audio] ... Transcript: <actual text>
+  const audioMatch = cleaned.match(/\[Audio\][\s\S]*?Transcript:\s*([\s\S]*)/);
   if (audioMatch) {
     cleaned = `🔊 ${audioMatch[1].trim()}`;
   }

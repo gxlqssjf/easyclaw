@@ -533,6 +533,23 @@ export const handleChannelRoutes: RouteHandler = async (req, res, url, pathname,
       const configPath = resolveOpenClawConfigPath();
       syncOwnerAllowFrom(storage, configPath);
 
+      // Mobile channel: also clean up the pairing record and stop the sync engine
+      if (channelId === "mobile" && ctx.mobileManager) {
+        const allPairings = ctx.mobileManager.getAllPairings();
+        const match = allPairings.find(p => p.pairingId === entry || p.id === entry);
+        if (match) {
+          ctx.mobileManager.disconnectPairing(match.id);
+          const rpcClient = getRpcClient?.();
+          if (rpcClient?.isConnected()) {
+            rpcClient.request("mobile_chat_stop_sync", {
+              pairingId: match.pairingId || entry,
+            }).catch((err: any) => {
+              log.error("Failed to stop mobile sync via RPC:", err);
+            });
+          }
+        }
+      }
+
       const remaining = await readAllAllowFromLists(channelId);
       sendJson(res, 200, { ok: true, changed, allowFrom: remaining });
     } catch (err) {

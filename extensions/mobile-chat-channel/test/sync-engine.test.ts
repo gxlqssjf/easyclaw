@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { MobileSyncEngine } from "../src/sync-engine.js";
-import { WebSocket } from "ws";
 import fs from "node:fs/promises";
-
-// Mock the ws module
-vi.mock("ws");
 
 // Mock fs to avoid creating actual media directories during tests
 vi.mock("node:fs/promises", () => ({
@@ -14,25 +10,45 @@ vi.mock("node:fs/promises", () => ({
     }
 }));
 
+// Mock transport
+function createMockTransport() {
+    const handlers = new Map<string, Function>();
+    const statusSubs = new Set<Function>();
+
+    return {
+        registerHandler: vi.fn((pairingId: string, handler: Function) => {
+            handlers.set(pairingId, handler);
+        }),
+        unregisterHandler: vi.fn((pairingId: string) => {
+            handlers.delete(pairingId);
+        }),
+        subscribeStatus: vi.fn((cb: Function) => {
+            statusSubs.add(cb);
+            cb('offline');
+            return () => statusSubs.delete(cb);
+        }),
+        send: vi.fn(),
+        isConnected: vi.fn(() => true),
+        _handlers: handlers,
+        _statusSubs: statusSubs,
+    } as any;
+}
+
 describe("MobileSyncEngine", () => {
     let mockApi: any;
+    let transport: ReturnType<typeof createMockTransport>;
     let engine: MobileSyncEngine;
 
     beforeEach(() => {
-        mockApi = {
-            gatewayRpc: {
-                request: vi.fn().mockResolvedValue({ runId: "test-run-123" })
-            }
-        };
-
-        // Clear mocks
+        mockApi = {};
         vi.clearAllMocks();
-
+        transport = createMockTransport();
         engine = new MobileSyncEngine(
             mockApi,
-            "fake-token",
-            "wss://relay.test.com",
-            "desktop-dev-id"
+            transport,
+            "pairing-1",
+            "desktop-dev-id",
+            "mobile-dev-id",
         );
     });
 
@@ -47,92 +63,66 @@ describe("MobileSyncEngine", () => {
         );
     });
 
-    it("should connect to the relay server with correct URL", () => {
+    it("should register handler with transport on start", () => {
         engine.start();
 
-        expect(WebSocket).toHaveBeenCalledWith(
-            "wss://relay.test.com/mobile-chat?token=fake-token&client=desktop"
+        expect(transport.registerHandler).toHaveBeenCalledWith(
+            "pairing-1",
+            expect.any(Function)
         );
+        expect(transport.subscribeStatus).toHaveBeenCalled();
     });
 
-    it("should queue outgoing messages and transmit them if WS is open", () => {
+    it("should queue outgoing messages and send via transport", () => {
         engine.start();
 
-        // Hack to simulate open connection
-        const mockWsInstance = vi.mocked(WebSocket).mock.results[0].value;
-        Object.defineProperty(mockWsInstance, 'readyState', {
-            get: vi.fn(() => WebSocket.OPEN)
-        });
-        mockWsInstance.send = vi.fn();
-
-        const msgId = engine.queueOutbound("mobile-id", { text: "Hello" });
+        const msgId = engine.queueOutbound("mobile-dev-id", { type: "text", text: "Hello" });
 
         expect(msgId).toBeDefined();
-        expect(mockWsInstance.send).toHaveBeenCalledWith(
-            expect.stringContaining('"payload":{"text":"Hello"}')
+        expect(transport.send).toHaveBeenCalledWith(
+            "pairing-1",
+            expect.objectContaining({
+                type: "msg",
+                sender: "desktop",
+                payload: { type: "text", text: "Hello" },
+            })
         );
     });
 
-    it("should route incoming text messages to the Gateway API", async () => {
+    it("should send ACK when receiving a message from mobile", async () => {
         engine.start();
-        const mockWsInstance = vi.mocked(WebSocket).mock.results[0].value;
+        transport.send.mockClear();
 
-        // Grab the on message handler
-        const onMessage = mockWsInstance.on.mock.calls.find(
-            (call: any) => call[0] === "message"
-        )[1];
-
-        const mockPayload = JSON.stringify({
+        const handler = transport._handlers.get("pairing-1");
+        await handler({
             type: "msg",
             id: "msg-1",
             sender: "mobile",
-            payload: {
-                type: "text",
-                text: "Ping from mobile"
-            }
+            payload: { type: "text", text: "Ping from mobile" }
         });
 
-        // Simulate incoming message
-        await onMessage(Buffer.from(mockPayload), false);
-
-        expect(mockApi.gatewayRpc.request).toHaveBeenCalledWith("agent", {
-            sessionKey: "agent:main:main",
-            channel: "mobile",
-            message: "Ping from mobile",
-            attachments: [],
-            idempotencyKey: "msg-1"
-        });
+        // Should have sent ACK
+        expect(transport.send).toHaveBeenCalledWith(
+            "pairing-1",
+            { type: "ack", id: "msg-1" }
+        );
     });
 
-    it("should parse incoming images and save them to disk", async () => {
+    it("should save incoming images to disk", async () => {
         engine.start();
-        const mockWsInstance = vi.mocked(WebSocket).mock.results[0].value;
-        const onMessage = mockWsInstance.on.mock.calls.find(
-            (call: any) => call[0] === "message"
-        )[1];
 
-        const mockPayload = JSON.stringify({
+        const handler = transport._handlers.get("pairing-1");
+        await handler({
             type: "msg",
             id: "msg-2",
             sender: "mobile",
             payload: {
                 type: "image",
                 mimeType: "image/png",
-                data: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                data: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
             }
         });
 
-        await onMessage(Buffer.from(mockPayload), false);
-
         expect(fs.writeFile).toHaveBeenCalled();
-        expect(mockApi.gatewayRpc.request).toHaveBeenCalledWith("agent", expect.objectContaining({
-            channel: "mobile",
-            attachments: expect.arrayContaining([
-                expect.objectContaining({
-                    type: "image",
-                    mimeType: "image/png"
-                })
-            ])
-        }));
     });
 });

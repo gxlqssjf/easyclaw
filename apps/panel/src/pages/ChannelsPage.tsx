@@ -14,9 +14,9 @@ import { ChannelAccountsTable } from "./channels/ChannelAccountsTable.js";
 export function ChannelsPage() {
   const { t, i18n } = useTranslation();
   const {
-    snapshot, loading, error, refreshing, wecomStatus, mobileStatus,
-    setWecomStatus, setMobileStatus,
-    loadChannelStatus, loadWeComStatus, loadMobileStatus,
+    snapshot, loading, error, refreshing, wecomStatus,
+    setWecomStatus,
+    loadChannelStatus, loadWeComStatus,
     handleRefresh,
   } = useChannelsData();
 
@@ -42,8 +42,8 @@ export function ChannelsPage() {
   const visibleChannels = getVisibleChannels(i18n.language, selectedDropdownChannel);
 
   const allAccounts = useMemo(
-    () => snapshot ? buildAccountsList(snapshot, wecomStatus, mobileStatus, t) : [],
-    [snapshot, wecomStatus, mobileStatus, t],
+    () => snapshot ? buildAccountsList(snapshot, wecomStatus, t) : [],
+    [snapshot, wecomStatus, t],
   );
 
   function handleAddAccountFromDropdown() {
@@ -130,10 +130,10 @@ export function ChannelsPage() {
         await unbindWeComAccount();
         setWecomStatus(null);
       } else if (channelId === "mobile") {
-        // Mobile uses its own unbind flow
+        // Disconnect all mobile pairings
         const { disconnectMobilePairing } = await import("../api/mobile-chat.js");
         await disconnectMobilePairing();
-        setMobileStatus(null);
+        await pollGatewayReady(() => loadChannelStatus());
       } else {
         await deleteChannelAccount(channelId, accountId);
         await pollGatewayReady(() => loadChannelStatus());
@@ -277,16 +277,18 @@ export function ChannelsPage() {
                 <div className="channel-info-title">
                   {t(selected.tooltip)}
                 </div>
-                <div>
-                  <a
-                    href={selected.tutorialUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-medium"
-                  >
-                    {t("channels.viewTutorial")} &rarr;
-                  </a>
-                </div>
+                {selected.tutorialUrl && (
+                  <div>
+                    <a
+                      href={selected.tutorialUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium"
+                    >
+                      {t("channels.viewTutorial")} &rarr;
+                    </a>
+                  </div>
+                )}
               </div>
             );
           })()}
@@ -332,7 +334,7 @@ export function ChannelsPage() {
         isOpen={mobileModalOpen}
         onClose={() => setMobileModalOpen(false)}
         onBindingSuccess={() => {
-          loadMobileStatus();
+          loadChannelStatus();
           setMobileModalOpen(false);
         }}
       />

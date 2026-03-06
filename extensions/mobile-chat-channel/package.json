@@ -27,9 +27,9 @@
         ],
         "channel": {
             "id": "mobile",
-            "label": "EasyClaw Mobile",
-            "selectionLabel": "EasyClaw Mobile",
-            "blurb": "Sync and chat with your agent from your own mobile device",
+            "label": "ChatClaw",
+            "selectionLabel": "ChatClaw",
+            "blurb": "Chat with your agent on the go from your phone via ChatClaw",
             "aliases": [
                 "app"
             ]

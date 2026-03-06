@@ -190,56 +190,9 @@ async function bringWindowToFront(electronApp: ElectronApplication) {
   });
 }
 
-/** Wait until a TCP port is accepting connections (up to `timeoutMs`). */
-async function waitForPort(port: number, timeoutMs = 30_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const listening = await new Promise<boolean>((resolve) => {
-      const sock = createConnection({ port, host: "127.0.0.1" });
-      sock.once("connect", () => { sock.destroy(); resolve(true); });
-      sock.once("error", () => resolve(false));
-    });
-    if (listening) return;
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  throw new Error(`Port ${port} did not start listening within ${timeoutMs}ms`);
-}
-
-/** Seed a provider key via the gateway REST API. */
-async function seedProvider(apiBase: string, opts: {
-  provider: string;
-  model: string;
-  apiKey: string;
-}): Promise<void> {
-  const res = await fetch(`${apiBase}/api/provider-keys`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      provider: opts.provider,
-      label: "E2E Test Key",
-      model: opts.model,
-      apiKey: opts.apiKey,
-    }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Failed to seed provider key: ${res.status} ${text}`);
-  }
-
-  const settingsRes = await fetch(`${apiBase}/api/settings`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ "llm-provider": opts.provider }),
-  });
-  if (!settingsRes.ok) {
-    throw new Error(`Failed to set active provider: ${settingsRes.status}`);
-  }
-}
 
 /**
- * Returning-user fixture: seeds a volcengine provider key via the
- * gateway API when E2E_VOLCENGINE_API_KEY is set. Otherwise, skips
- * onboarding so basic smoke tests still work without real API keys.
+ * Returning-user fixture: skips onboarding to reach the main page.
  *
  * Always lands on the main page with a fully connected gateway, so
  * individual tests don't race against gateway startup time.
@@ -271,36 +224,9 @@ export const test = base.extend<ElectronFixtures>({
     });
     await bringWindowToFront(electronApp);
 
-    // If onboarding is shown, either seed a real provider or skip
+    // If onboarding is shown, skip it to reach the main page
     if (await window.locator(".onboarding-page").isVisible()) {
-      const apiKey = process.env.E2E_VOLCENGINE_API_KEY;
-      if (apiKey) {
-        // Wait for the gateway to finish its initial startup before seeding.
-        // The seed triggers a full gateway stop+start (PUT /api/settings has
-        // no hint → handleProviderChange does launcher.stop()+start()).
-        // If we seed while the gateway is still in its initial startup, the
-        // restart interrupts it — under 4-worker parallel load this cascades
-        // past the 30 s fixture timeout.
-        const gwPort = parseInt(
-          await electronApp.evaluate(() => process.env.EASYCLAW_GATEWAY_PORT || "28789"),
-          10,
-        );
-        await waitForPort(gwPort);
-
-        await seedProvider(apiBase, {
-          provider: "volcengine",
-          model: "doubao-seed-1-6-flash-250828",
-          apiKey,
-        });
-        // Reload to trigger onboarding re-check so the app transitions to
-        // the main page now that a provider is configured.
-        // The gateway restarts after seeding (config + model change); the
-        // `.chat-status-dot-connected` wait below handles reconnection.
-        await window.reload();
-      } else {
-        // No API key available — skip onboarding to reach the main page
-        await window.locator(".btn-ghost").click();
-      }
+      await window.locator(".btn-ghost").click();
       await window.waitForSelector(".sidebar-brand", { timeout: 45_000 });
     }
 

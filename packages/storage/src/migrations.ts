@@ -240,4 +240,26 @@ export const migrations: Migration[] = [
       UPDATE channel_recipients SET is_owner = 1;
     `,
   },
+  {
+    id: 16,
+    name: "add_multi_phone_columns_to_mobile_pairings",
+    sql: `
+      ALTER TABLE mobile_pairings ADD COLUMN mobile_device_id TEXT;
+      ALTER TABLE mobile_pairings ADD COLUMN name TEXT;
+    `,
+  },
+  {
+    id: 17,
+    name: "add_pairing_id_to_mobile_pairings",
+    sql: `
+      ALTER TABLE mobile_pairings ADD COLUMN pairing_id TEXT;
+    `,
+  },
+  {
+    id: 18,
+    name: "add_status_to_mobile_pairings",
+    sql: `
+      ALTER TABLE mobile_pairings ADD COLUMN status TEXT DEFAULT 'active';
+    `,
+  },
 ];

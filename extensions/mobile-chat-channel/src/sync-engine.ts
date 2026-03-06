@@ -1,25 +1,30 @@
-import { WebSocket } from 'ws';
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import fs from "node:fs/promises";
+import { RelayTransport } from './relay-transport';
 
 // Ensure the local media directory exists.
 const MEDIA_DIR = join(homedir(), ".easyclaw", "openclaw", "media", "inbound", "mobile");
 
 export class MobileSyncEngine {
-    private ws: WebSocket | null = null;
-    private reconnectTimer: NodeJS.Timeout | null = null;
-    private isRunning = false;
     private outbox: Map<string, any> = new Map();
-    private runIdMap: Map<string, string> = new Map();
+    private unsubTransport: (() => void) | null = null;
+
+    public readonly mobileDeviceId: string;
+    public pairingId: string;
+    public mobileOnline: boolean = false;
+    public onUnpaired: (() => void) | null = null;
 
     constructor(
         private readonly api: any, // GatewayPluginApi
-        private accessToken: string,
-        private relayUrl: string,
-        private desktopDeviceId: string
+        private transport: RelayTransport,
+        pairingId: string,
+        private desktopDeviceId: string,
+        mobileDeviceId: string,
     ) {
+        this.pairingId = pairingId;
+        this.mobileDeviceId = mobileDeviceId;
         this.ensureMediaDir();
     }
 
@@ -28,95 +33,44 @@ export class MobileSyncEngine {
     }
 
     public start() {
-        if (this.isRunning) return;
-        this.isRunning = true;
-        this.connect();
+        // Register handler for this pairing's messages
+        this.transport.registerHandler(this.pairingId, (msg) => this.handleIncoming(msg));
+
+        // Subscribe to transport connection status for reconnect outbox flush
+        this.unsubTransport = this.transport.subscribeStatus((status) => {
+            if (status === 'online') {
+                // On reconnect, flush outbox
+                for (const [_id, msg] of this.outbox.entries()) {
+                    this.transport.send(this.pairingId, msg);
+                }
+            }
+            if (status === 'offline') {
+                this.mobileOnline = false;
+            }
+        });
     }
 
     public stop() {
-        this.isRunning = false;
-        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-        if (this.ws) {
-            this.ws.close();
-            this.ws = null;
+        this.mobileOnline = false;
+        this.transport.unregisterHandler(this.pairingId);
+        if (this.unsubTransport) {
+            this.unsubTransport();
+            this.unsubTransport = null;
         }
     }
 
-    public updateCredentials(accessToken: string, relayUrl: string, desktopDeviceId: string) {
-        this.accessToken = accessToken;
-        this.relayUrl = relayUrl;
-        this.desktopDeviceId = desktopDeviceId;
-        if (this.isRunning) {
-            this.stop();
-            this.start(); // Reconnect with new credentials
-        }
+    /** Notify the mobile peer that this pairing is being removed, then stop. */
+    public sendUnpairAndStop() {
+        this.transport.send(this.pairingId, { type: "unpair" });
+        // Small delay to let the message flush before unregistering
+        setTimeout(() => this.stop(), 200);
     }
 
-    private connect() {
-        if (!this.isRunning) return;
-
-        let routeUrl = this.relayUrl.endsWith('/')
-            ? `${this.relayUrl}mobile-chat`
-            : `${this.relayUrl}/mobile-chat`;
-
-        const wsUrl = `${routeUrl}?token=${this.accessToken}&client=desktop`;
-
-        try {
-            this.ws = new WebSocket(wsUrl);
-
-            this.ws.on('open', () => {
-                console.log("[MobileSync] Connected to Relay server.");
-
-                // On reconnect, flush outbox
-                for (const [id, msg] of this.outbox.entries()) {
-                    this.transmit(msg);
-                }
-            });
-
-            this.ws.on('message', async (data: Buffer, isBinary: boolean) => {
-                try {
-                    // Mobile sends JSON for now. Future optimization could use BSON or MSGPack for binary
-                    const msg = JSON.parse(data.toString('utf-8'));
-                    await this.handleIncoming(msg);
-                } catch (err: any) {
-                    console.error("[MobileSync] Error parsing incoming message:", err.message);
-                }
-            });
-
-            this.ws.on('close', () => {
-                console.log("[MobileSync] Disconnected from Relay server.");
-                this.ws = null;
-                this.scheduleReconnect();
-            });
-
-            this.ws.on('error', (err) => {
-                console.error("[MobileSync] WebSocket error:", err.message);
-                this.ws?.close();
-            });
-
-        } catch (err: any) {
-            console.error("[MobileSync] Failed to initialize WebSocket:", err.message);
-            this.scheduleReconnect();
-        }
+    public get isRelayConnected(): boolean {
+        return this.transport.isConnected();
     }
 
-    private scheduleReconnect() {
-        if (!this.isRunning) return;
-        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-        // Exponential backoff or simple delay. We'll use 3 seconds for now.
-        this.reconnectTimer = setTimeout(() => {
-            console.log("[MobileSync] Attempting to reconnect...");
-            this.connect();
-        }, 3000);
-    }
-
-    private transmit(payload: any) {
-        if (this.ws?.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify(payload));
-        }
-    }
-
-    public queueOutbound(mobileDeviceId: string, content: any) {
+    public queueOutbound(_destination: string, content: any) {
         const id = randomUUID();
         const msg = {
             type: "msg",
@@ -129,37 +83,40 @@ export class MobileSyncEngine {
         // Cache for ACK
         this.outbox.set(id, msg);
 
-        // Send immediately if possible
-        this.transmit(msg);
+        // Send immediately if possible (transport.send adds pairingId)
+        this.transport.send(this.pairingId, msg);
         return id;
     }
 
     private async handleIncoming(msg: any) {
         switch (msg.type) {
             case "ack":
-                // Mobile acknowledged our message
                 if (msg.id) {
                     this.outbox.delete(msg.id);
                 }
                 break;
 
             case "sync_req":
-                // Mobile is requesting missing history
-                // In a production SQL implementation, we would query the database for messages > msg.cursor
-                // and return them as sync_res
-                // For V0, we acknowledge the cursor. The agent history is held in OpenClaw's internal storage
-                this.transmit({
+                this.transport.send(this.pairingId, {
                     type: "sync_res",
                     id: randomUUID(),
-                    messages: [] // To be wired to local DB extraction if needed
+                    messages: []
                 });
                 break;
 
-            case "msg":
-                // Send an ACK immediately
-                this.transmit({ type: "ack", id: msg.id });
+            case "peer_status":
+                this.mobileOnline = msg.status === "online";
+                console.log(`[MobileSync:${this.pairingId.slice(0,8)}] Mobile peer is now ${msg.status}`);
+                break;
 
-                // Process the actual payload with the OpenClaw Gateway
+            case "unpair":
+                console.log(`[MobileSync:${this.pairingId.slice(0,8)}] Received unpair from mobile`);
+                this.onUnpaired?.();
+                break;
+
+            case "msg":
+                // Send ACK via transport
+                this.transport.send(this.pairingId, { type: "ack", id: msg.id });
                 await this.processIncomingPayload(msg);
                 break;
         }
@@ -168,58 +125,140 @@ export class MobileSyncEngine {
     private async processIncomingPayload(msg: any) {
         const { payload, sender } = msg;
 
-        // Only process payloads originating from mobile
         if (sender !== "mobile" || !payload) return;
 
         try {
+            const core = this.api.runtime;
+            const cfg = this.api.config;
+
             let messageText = "";
-            let attachments = [];
+            let mediaPaths: string[] = [];
+            let mediaTypes: string[] = [];
 
             if (payload.type === "text") {
                 messageText = payload.text;
             } else if (payload.type === "image") {
-                // If it's an image, we need to save the base64 data to disk for the agent 
-                // to have a valid file path reference that won't exceed memory limits.
                 const fileName = `mobile-img-${Date.now()}.jpg`;
                 const filePath = join(MEDIA_DIR, fileName);
 
-                // Strip the data:image/jpeg;base64, prefix if present
                 const b64Data = payload.data.replace(/^data:image\/\w+;base64,/, "");
                 await fs.writeFile(filePath, Buffer.from(b64Data, 'base64'));
 
-                messageText = payload.text || `[Image sent via mobile. Saved locally to ${filePath}]`;
-
-                attachments.push({
-                    type: "image",
-                    mimeType: payload.mimeType || "image/jpeg",
-                    content: b64Data
-                });
+                messageText = payload.text || "[Image from mobile]";
+                mediaPaths.push(filePath);
+                mediaTypes.push(payload.mimeType || "image/jpeg");
             } else if (payload.type === "voice") {
-                // TODO: Wire up speech-to-text. For now, mark as unsupported.
-                messageText = "[Voice feature logic not fully attached yet]";
+                const ext = (payload.mimeType || "audio/webm").includes("mp4") ? "m4a" : "webm";
+                const fileName = `mobile-voice-${Date.now()}.${ext}`;
+                const filePath = join(MEDIA_DIR, fileName);
+
+                const b64Data = (payload.data || "").replace(/^data:audio\/\w+;base64,/, "");
+                await fs.writeFile(filePath, Buffer.from(b64Data, "base64"));
+
+                messageText = payload.text || "[Voice message]";
+                mediaPaths.push(filePath);
+                mediaTypes.push(payload.mimeType || "audio/webm");
+            } else if (payload.type === "file") {
+                const ext = (payload.mimeType || "application/octet-stream").split("/").pop() || "bin";
+                const fileName = `mobile-file-${Date.now()}.${ext}`;
+                const filePath = join(MEDIA_DIR, fileName);
+
+                const b64Data = (payload.data || "").replace(/^data:[^;]+;base64,/, "");
+                await fs.writeFile(filePath, Buffer.from(b64Data, "base64"));
+
+                messageText = payload.text || "[File from mobile]";
+                mediaPaths.push(filePath);
+                mediaTypes.push(payload.mimeType || "application/octet-stream");
             }
 
-            if (!messageText && attachments.length === 0) return;
+            if (!messageText && mediaPaths.length === 0) return;
 
-            // Send standard RPC request to the Gateway Agent
-            // Using agent:main:main ensures the conversation appears in the unified Chat UI on Desktop
-            const result = await this.api.gatewayRpc.request("agent", {
-                sessionKey: "agent:main:main",
+            const route = core.channel.routing.resolveAgentRoute({
+                cfg,
                 channel: "mobile",
-                message: messageText,
-                attachments: attachments,
-                idempotencyKey: msg.id
+                accountId: this.pairingId,
+                peer: { kind: "direct", id: this.pairingId },
             });
 
-            // Map the resulting generic agent Run ID back to the mobile client so
-            // we know where to route the response when OpenClaw fires 'chat' events via the plugin outbox
-            if (result && result.runId) {
-                // Mobile pairing is 1-1 per gateway config
-                this.runIdMap.set(result.runId, "mobile_device");
-            }
+            const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
+            const storePath = core.channel.session.resolveStorePath(
+                (cfg.session as Record<string, unknown> | undefined)?.store as string | undefined,
+                { agentId: route.agentId },
+            );
+            const previousTimestamp = core.channel.session.readSessionUpdatedAt({
+                storePath,
+                sessionKey: route.sessionKey,
+            });
+
+            const body = core.channel.reply.formatAgentEnvelope({
+                channel: "Mobile",
+                from: this.pairingId,
+                timestamp: msg.timestamp || Date.now(),
+                previousTimestamp,
+                envelope: envelopeOptions,
+                body: messageText,
+            });
+
+            const ctxPayload = core.channel.reply.finalizeInboundContext({
+                Body: body,
+                BodyForAgent: messageText,
+                RawBody: messageText,
+                CommandBody: messageText,
+                From: `mobile:${this.pairingId}`,
+                To: `mobile:${this.pairingId}`,
+                SessionKey: route.sessionKey,
+                AccountId: route.accountId,
+                ChatType: "direct",
+                ConversationLabel: `Mobile ${this.pairingId.slice(0, 8)}`,
+                Provider: "mobile",
+                Surface: "mobile",
+                MessageSid: msg.id,
+                Timestamp: msg.timestamp || Date.now(),
+                OriginatingChannel: "mobile",
+                OriginatingTo: `mobile:${this.pairingId}`,
+                CommandAuthorized: true,
+                ...(mediaPaths.length > 0 ? { MediaPaths: mediaPaths, MediaTypes: mediaTypes } : {}),
+            });
+
+            await core.channel.session.recordInboundSession({
+                storePath,
+                sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+                ctx: ctxPayload,
+                onRecordError: (err: any) => {
+                    console.error("[MobileSync] session meta error:", err);
+                },
+            });
+
+            // Track last block text to dedup block+final deliveries.
+            // The buffered dispatcher calls deliver() for both streaming blocks
+            // and the final reply, which often carry identical text.
+            let lastBlockText: string | null = null;
+            await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+                ctx: ctxPayload,
+                cfg,
+                dispatcherOptions: {
+                    deliver: async (replyPayload: any, info: { kind: string }) => {
+                        const text = replyPayload.text ?? "";
+                        if (!text) return;
+                        if (info.kind === "block") {
+                            lastBlockText = text;
+                            this.queueOutbound(this.pairingId, { type: "text", text });
+                            return;
+                        }
+                        // Skip final reply if it matches the last block (already delivered)
+                        if (info.kind === "final" && text === lastBlockText) return;
+                        this.queueOutbound(this.pairingId, { type: "text", text });
+                    },
+                    onError: (err: any, info: any) => {
+                        console.error(`[MobileSync] ${info.kind} reply failed:`, err);
+                    },
+                },
+            });
+
+            console.log("[MobileSync] Message dispatched to agent. sessionKey:", route.sessionKey);
 
         } catch (err: any) {
-            console.error("[MobileSync] Failed to pass message to Gateway Agent:", err.message);
+            console.error("[MobileSync] Failed to pass message to Gateway Agent:", err.message, err.stack);
         }
     }
 }

@@ -902,7 +902,7 @@ describe("Database", () => {
       .prepare("SELECT * FROM _migrations")
       .all() as Array<{ id: number; name: string; applied_at: string }>;
 
-    expect(rows).toHaveLength(15);
+    expect(rows).toHaveLength(18);
     expect(rows[0].id).toBe(1);
     expect(rows[0].name).toBe("initial_schema");
     expect(rows[1].id).toBe(2);
@@ -921,6 +921,12 @@ describe("Database", () => {
     expect(rows[11].name).toBe("add_chat_sessions_table");
     expect(rows[14].id).toBe(15);
     expect(rows[14].name).toBe("add_is_owner_to_channel_recipients");
+    expect(rows[15].id).toBe(16);
+    expect(rows[15].name).toBe("add_multi_phone_columns_to_mobile_pairings");
+    expect(rows[16].id).toBe(17);
+    expect(rows[16].name).toBe("add_pairing_id_to_mobile_pairings");
+    expect(rows[17].id).toBe(18);
+    expect(rows[17].name).toBe("add_status_to_mobile_pairings");
   });
 
   it("should not re-apply migrations on second open", () => {
@@ -932,7 +938,7 @@ describe("Database", () => {
       .prepare("SELECT * FROM _migrations")
       .all() as Array<{ id: number; name: string }>;
 
-    expect(rows).toHaveLength(15);
+    expect(rows).toHaveLength(18);
   });
 });
 

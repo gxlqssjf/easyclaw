@@ -3004,6 +3004,12 @@ tbody td {
 .recipients-table th:nth-child(2) { width: 28%; }
 .recipients-table th:nth-child(3) { width: 17%; }
 .recipients-table th:nth-child(4) { width: 25%; }
+/* Mobile allowlist: presence dot is first column, shift widths */
+.recipients-table th.presence-col { width: 24px !important; min-width: 24px; max-width: 24px; }
+.recipients-table th.presence-col ~ th:nth-child(2) { width: 30%; }
+.recipients-table th.presence-col ~ th:nth-child(3) { width: 28%; }
+.recipients-table th.presence-col ~ th:nth-child(4) { width: 17%; }
+.recipients-table th.presence-col ~ th:nth-child(5) { width: 25%; }
 
 .recipients-table th {
   text-align: left;
@@ -3043,6 +3049,37 @@ tbody td {
   border-color: var(--color-primary);
 }
 
+.presence-col {
+  width: 24px !important;
+  min-width: 24px;
+  max-width: 24px;
+  text-align: center;
+  padding: 0 4px !important;
+}
+.presence-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--color-text-muted);
+}
+.presence-online {
+  background-color: var(--color-success, #22c55e);
+}
+.presence-offline {
+  background-color: var(--color-text-muted);
+}
+.presence-stale {
+  background-color: var(--color-warning, #f59e0b);
+}
+
+.stale-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--color-warning, #f59e0b);
+  margin-top: 2px;
+}
+
 .recipients-empty {
   padding: 12px 0;
   color: var(--color-text-muted);
@@ -3053,6 +3090,55 @@ tbody td {
   padding: 12px 0;
   color: var(--color-text-muted);
   font-size: 13px;
+}
+
+/* Mobile Pairing Modal */
+.mobile-pairing-modal-body {
+  padding: 1rem 0;
+}
+
+.mobile-pairing-view {
+  text-align: center;
+}
+
+.mobile-existing-hint {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  margin-bottom: 0.75rem;
+}
+
+.mobile-scan-hint {
+  margin-top: 1rem;
+  margin-bottom: 2rem;
+}
+
+.mobile-qr-container {
+  margin: 0 auto;
+  padding: 16px;
+  background: white;
+  display: inline-block;
+  border-radius: 12px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.mobile-qr-container img {
+  display: block;
+}
+
+.mobile-code-section {
+  margin-top: 2rem;
+}
+
+.mobile-pairing-code {
+  font-size: 2rem;
+  letter-spacing: 4px;
+  font-weight: bold;
+  font-family: monospace;
+  background: var(--color-bg-alt);
+  padding: 1rem 2rem;
+  border-radius: 8px;
+  display: inline-block;
+  margin-top: 0.5rem;
 }
 
 .select-min-w-200 {

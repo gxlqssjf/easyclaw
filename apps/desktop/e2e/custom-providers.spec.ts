@@ -18,9 +18,9 @@ test.describe("Custom Providers", () => {
     await providersBtn.click();
     await expect(providersBtn).toHaveClass(/nav-active/);
 
-    // Verify pre-seeded volcengine key exists
+    // No pre-seeded keys — start from zero
     const keyCards = window.locator(".key-card");
-    await expect(keyCards).toHaveCount(1);
+    await expect(keyCards).toHaveCount(0);
 
     // -- Switch to Custom tab --
     const form = window.locator(".page-two-col");
@@ -68,9 +68,9 @@ test.describe("Custom Providers", () => {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       await saveBtn.click();
-      // Wait for either success (2 key cards = 1 pre-seeded + 1 custom) or error
+      // Wait for either success (1 key card) or error
       const result = await Promise.race([
-        keyCards.nth(1).waitFor({ state: "visible", timeout: 30_000 }).then(() => "ok" as const),
+        keyCards.first().waitFor({ state: "visible", timeout: 30_000 }).then(() => "ok" as const),
         errorAlert.waitFor({ state: "visible", timeout: 30_000 }).then(() => "error" as const),
       ]).catch(() => "timeout" as const);
       if (result === "ok") break;
@@ -80,8 +80,8 @@ test.describe("Custom Providers", () => {
       }
     }
 
-    // Verify both keys appear
-    await expect(keyCards).toHaveCount(2, { timeout: 10_000 });
+    // Verify the custom key card appeared
+    await expect(keyCards).toHaveCount(1, { timeout: 10_000 });
 
     // -- Verify the custom provider key card --
     const customCard = window.locator(".key-card", { hasText: /Zhipu Custom/i });
@@ -119,8 +119,32 @@ test.describe("Custom Providers", () => {
       await backdrop.waitFor({ state: "hidden", timeout: 3_000 }).catch(() => {});
     }
 
-    // -- Seed a custom provider via API BEFORE navigating to Models page --
+    // -- Seed two custom providers via API BEFORE navigating to Models page --
     // This ensures the ProvidersPage will fetch both keys on initial mount.
+    const baseRes = await fetch(`${apiBase}/api/provider-keys`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "custom-e2ebase",
+        label: "E2E Base Provider",
+        model: "glm-4-flash",
+        apiKey: zhipuKey,
+        authType: "custom",
+        baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+        customProtocol: "openai",
+        customModelsJson: JSON.stringify(["glm-4-flash"]),
+      }),
+    });
+    expect(baseRes.ok).toBe(true);
+
+    // Activate the base provider
+    const activateRes = await fetch(`${apiBase}/api/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ "llm-provider": "custom-e2ebase" }),
+    });
+    expect(activateRes.ok).toBe(true);
+
     const createRes = await fetch(`${apiBase}/api/provider-keys`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -142,17 +166,23 @@ test.describe("Custom Providers", () => {
     await providersBtn.click();
     await expect(providersBtn).toHaveClass(/nav-active/);
 
+    // Switch to Custom tab where custom provider key cards are displayed
+    const form = window.locator(".page-two-col");
+    const customTab = form.locator(".tab-btn", { hasText: /Custom/i });
+    await customTab.click();
+    await expect(customTab).toHaveClass(/tab-btn-active/);
+
     // Wait for key cards to load
     const keyCards = window.locator(".key-card");
     await expect(keyCards).toHaveCount(2, { timeout: 15_000 });
 
-    const volcengineCard = window.locator(".key-card", { hasText: /Volcengine/i });
+    const baseCard = window.locator(".key-card", { hasText: /E2E Base Provider/i });
     const customCard = window.locator(".key-card", { hasText: /E2E Custom Provider/i });
-    await expect(volcengineCard).toBeVisible();
+    await expect(baseCard).toBeVisible();
     await expect(customCard).toBeVisible();
 
-    // Volcengine should be active, custom should be inactive
-    await expect(volcengineCard).toHaveClass(/key-card-active/);
+    // Base should be active, custom should be inactive
+    await expect(baseCard).toHaveClass(/key-card-active/);
     await expect(customCard).toHaveClass(/key-card-inactive/);
 
     // -- Activate the custom provider --
@@ -160,7 +190,7 @@ test.describe("Custom Providers", () => {
 
     // Verify custom provider is now active
     await expect(customCard).toHaveClass(/key-card-active/, { timeout: 10_000 });
-    await expect(volcengineCard).toHaveClass(/key-card-inactive/);
+    await expect(baseCard).toHaveClass(/key-card-inactive/);
     await expect(customCard.locator(".badge-active")).toBeVisible();
 
     // -- Switch model within the custom provider --
@@ -172,9 +202,9 @@ test.describe("Custom Providers", () => {
     // -- Delete the custom provider --
     await customCard.locator(".btn", { hasText: /Remove/i }).click();
 
-    // Should only have 1 key card left (volcengine)
+    // Should only have 1 key card left (base)
     await expect(keyCards).toHaveCount(1, { timeout: 10_000 });
-    // Volcengine should auto-activate after custom was deleted
-    await expect(volcengineCard).toHaveClass(/key-card-active/);
+    // Base should auto-activate after custom was deleted
+    await expect(baseCard).toHaveClass(/key-card-active/);
   });
 });

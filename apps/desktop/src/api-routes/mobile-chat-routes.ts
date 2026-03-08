@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { resolveOpenClawStateDir, resolveOpenClawConfigPath } from "@easyclaw/gateway";
 import { syncOwnerAllowFrom } from "../owner-sync.js";
+import { PAIRING_CODE_TTL_MS } from "../mobile-manager.js";
 import type { ApiContext } from "./api-context.js";
 import { parseBody, sendJson } from "./route-utils.js";
 
@@ -96,7 +97,7 @@ export async function handleMobileChatRoutes(
 
         try {
             const codeData = await ctx.mobileManager.requestPairingCode();
-            sendJson(res, 200, codeData);
+            sendJson(res, 200, { ...codeData, ttlMs: PAIRING_CODE_TTL_MS });
         } catch (err: any) {
             sendJson(res, 500, { error: err.message || "Failed to generate pairing code" });
         }

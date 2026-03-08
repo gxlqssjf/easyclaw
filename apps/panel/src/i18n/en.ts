@@ -685,6 +685,10 @@ export default {
     disconnect: "Disconnect Device",
     waitingForConnection: "Scan to Connect",
     scanHint: "Scan the QR code with your phone camera to connect.",
+    codeExpired: "QR Code Expired",
+    codeExpiredHint: "Click the QR code to generate a new pairing code.",
+    clickToRefresh: "Click to refresh",
+    expiresIn: "Expires in {{seconds}}s",
     existingPairings: "{{count}} device(s) already paired."
   },
   permissions: {

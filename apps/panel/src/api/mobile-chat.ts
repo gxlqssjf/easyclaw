@@ -18,8 +18,8 @@ export interface MobilePairingStatusResponse {
     error?: string;
 }
 
-export async function generateMobilePairingCode(): Promise<{ code?: string; qrUrl?: string; error?: string }> {
-    return await fetchJson<{ code?: string; qrUrl?: string; error?: string }>("/mobile/pairing-code/generate", {
+export async function generateMobilePairingCode(): Promise<{ code?: string; qrUrl?: string; ttlMs?: number; error?: string }> {
+    return await fetchJson<{ code?: string; qrUrl?: string; ttlMs?: number; error?: string }>("/mobile/pairing-code/generate", {
         method: "POST"
     });
 }

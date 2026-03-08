@@ -685,6 +685,10 @@ export default {
     disconnect: "断开连接",
     waitingForConnection: "扫描二维码连接",
     scanHint: "用手机摄像头扫描二维码即可连接。",
+    codeExpired: "二维码已过期",
+    codeExpiredHint: "点击二维码刷新获取新的配对码。",
+    clickToRefresh: "点击刷新",
+    expiresIn: "{{seconds}}秒后过期",
     existingPairings: "已有 {{count}} 台设备配对。"
   },
   permissions: {
